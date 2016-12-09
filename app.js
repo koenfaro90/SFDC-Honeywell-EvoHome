@@ -1,13 +1,41 @@
-console.log('hi');
 var fs = require('fs');
 var request = require('request');
 var Promise = require('bluebird');
 var _ = require('underscore');
 var jsforce = require('jsforce');
+var winston = require('winston');
+var moment = require('moment');
 var config = JSON.parse(fs.readFileSync('config.json').toString());
 
+winston.configure({
+	transports: [
+		new (winston.transports.Console) (
+			{
+				colorize: true,
+				timestamp: function() {
+					return Date.now();
+				},
+				formatter: function(options) {
+					return winston.config.colorize(options.level, options.level.toUpperCase())+ " [" + moment(this.timestamp()).format('YYYY-MM-DD HH:mm:ss.SSS') +"] " + options.message;
+				}
+			}
+		),
+		new (winston.transports.File)({
+			filename: config.logFile,
+			json: false,
+			timestamp: function() {
+				return Date.now();
+			},
+			formatter: function(options) {
+				return "[" + moment(this.timestamp()).format('YYYY-MM-DD HH:mm:ss.SSS') +"] " + options.message;
+			}
+		})
+	]
+});
+
+
 process.on('uncaughtException', function(err) {
-	console.error('err', err);
+	winston.error('Uncaught exception', err);
 })
 
 class EvoHomeClient {
@@ -26,17 +54,28 @@ class EvoHomeClient {
 			.then(this._selectInstallationId.bind(this))
 			.then(() => {
 				this._cycle();
+				if (config.interval <= 60000) {
+					winston.warn('Setting interval to lower than a minute - risk getting blacklisted by honeywell');
+				}
 				setInterval(this._cycle.bind(this), config.interval);
 			})
 			.catch((err) => {
-				console.error('Caught error', err);
+				winston.error('Caught error', err);
 			});
 	}
 	_cycle() {
-		this.getStatus.bind(this)
+		winston.info('Executing cycle');
+		this.getStatus()
+			.then((data) => {
+				winston.info('Retrieved data from honeywell: ' + JSON.stringify(data));
+				return data;
+			})
 			.then(this._storeInSF.bind(this))
+			.then(() => {
+				winston.info('Stored data in Salesforce');
+			})
 			.catch((err) => {
-				console.log('Caught error in cycle', err);
+				winston.error('Caught error in cycle', err);
 			})
 	}
 	_login() {
@@ -100,33 +139,28 @@ class EvoHomeClient {
 	_checkLogin() {
 		return new Promise((resolve, reject) => {
 			if ((+new Date()) > this.token_expiration) {
-				// refresh token
-				console.error('need to refresh token');
+				winston.error('need to refresh token');
 			} else {
 				return resolve();
 			}
 		});
 	}
 	getAccountInfo() {
-		console.log('getAccountInfo');
 		return this._checkLogin()
 			.then(this._request.bind(this, 'https://tccna.honeywell.com/WebAPI/emea/api/v1/userAccount'))
 	}
 	_storeAccountInfo(data) {
-		console.log('storeAccountInfo', data);
 		return new Promise((resolve, reject) => {
 			this.account_info = data;
 			return resolve();
 		});
 	}
 	getInstallations() {
-		console.log('_getInstallations');
 		return this._checkLogin()
 			.then(this._request.bind(this, 'https://tccna.honeywell.com/WebAPI/emea/api/v1/location/installationInfo?userId='+ this.account_info.userId + '&includeTemperatureControlSystems=True'))
 
 	}
 	_selectInstallationId(data) {
-		console.log('installations', data, JSON.stringify(data, 0, "\t"));
 		return new Promise((resolve, reject) => {
 			try {
 				this.locationId = data[0].locationInfo.locationId;
@@ -148,14 +182,15 @@ class EvoHomeClient {
 		return new Promise((resolve, reject) => {
 			var sfInstance = new StoreInSF(config.salesforce.url, config.salesforce.username, config.salesforce.password);
 			sfInstance.store(data)
+				.then(resolve)
 				.catch((err) => {
-					console.error('Error storing data in SF', err);
+					winston.error('Error storing data in SF', err);
 				})
 		});
 	}
 }
 
-class StoreInSF() {
+class StoreInSF {
 	constructor(url, username, password) {
 		this.url = url;
 		this.username = username;
@@ -165,11 +200,11 @@ class StoreInSF() {
 	_login() {
 		return new Promise((resolve, reject) => {
 			this.conn = new jsforce.Connection({
-				loginUrl : this.url;
+				loginUrl : this.url
 			});
 			this.conn.login(this.username, this.password, (err, userInfo) => {
 				if (err) {
-					console.error('Error logging in to SF');
+					winston.error('Error logging in to SF');
 					return reject(err);
 				}
 				return resolve();
@@ -180,17 +215,17 @@ class StoreInSF() {
 		return new Promise((resolve, reject) => {
 			this._login()
 				.then(() => {
-					var items = this._createSObjects(data)
-					conn.sobject("Temp_Zone__c").create(
+					var items = this._createSObjects(data);
+					this.conn.sobject("Temp_Log__c").create(
 						items,
-						function(err, rets) {
+						function(err, records) {
 						if (err) {
-							console.error(err);
+							winston.error(err);
 							return reject(err);
 						}
 						_.each(records, (rec) => {
 							if (rec.success == false) {
-								console.error('Error creating record', rec);
+								winston.error('Error creating record', rec);
 							}
 						});
 						return resolve();
@@ -202,7 +237,7 @@ class StoreInSF() {
 	}
 	_createSObjects(data) {
 		var items = [];
-		_.each(gateways[0].temperatureControlSystems[0].zones, (zone) {
+		_.each(data.gateways[0].temperatureControlSystems[0].zones, (zone) => {
 			items.push(this._createSObject(zone));
 		})
 		return items;
@@ -212,7 +247,10 @@ class StoreInSF() {
 			SetPointMode__c: zone.heatSetpointStatus.setpointMode,
 			TargetTemperature__c: zone.heatSetpointStatus.targetTemperature,
 			Temperature__c: zone.temperatureStatus. temperature,
-			'TempZone__r.ZoneID__c': zone.Id
+			TempZone__r: {
+				ZoneID__c: zone.zoneId
+			},
+			ActiveFaults__c: zone.activeFaults.length == 0 ? null : JSON.stringify(zone.activeFaults)
 		}
 	}
 }
