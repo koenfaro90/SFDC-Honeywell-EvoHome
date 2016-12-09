@@ -1,5 +1,6 @@
 {
 	"interval": "60000",
+	"logFile": "app.log",
 	"honeywell": {
 		"username": "<username>",
 		"password": "<password>"
