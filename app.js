@@ -54,10 +54,12 @@ class EvoHomeClient {
 			.then(this._selectInstallationId.bind(this))
 			.then(() => {
 				this._cycle();
-				if (config.interval <= 60000) {
-					winston.warn('Setting interval to lower than a minute - risk getting blacklisted by honeywell');
+				if (config.interval != null && config.interval != undefined) {
+					setInterval(this._cycle.bind(this), config.interval);
+					if (config.interval <= 60000) {
+						winston.warn('Setting interval to lower than a minute - risk getting blacklisted by honeywell');
+					}
 				}
-				setInterval(this._cycle.bind(this), config.interval);
 			})
 			.catch((err) => {
 				winston.error('Caught error', err);
