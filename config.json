@@ -1,0 +1,12 @@
+{
+	"interval": "60000",
+	"honeywell": {
+		"username": "<username>",
+		"password": "<password>"
+	},
+	"salesforce": {
+		"url": "https://login.salesforce.com",
+		"username": "<username>",
+		"password": "<password>"
+	}
+}
