@@ -185,6 +185,7 @@ class EvoHomeClient {
 				.then(resolve)
 				.catch((err) => {
 					winston.error('Error storing data in SF', err);
+					return reject(err);
 				})
 		});
 	}
@@ -218,18 +219,19 @@ class StoreInSF {
 					var items = this._createSObjects(data);
 					this.conn.sobject("Temp_Log__c").create(
 						items,
-						function(err, records) {
-						if (err) {
-							winston.error(err);
-							return reject(err);
-						}
-						_.each(records, (rec) => {
-							if (rec.success == false) {
-								winston.error('Error creating record', rec);
+						(err, records) => {
+							if (err) {
+								winston.error(err);
+								return reject(err);
 							}
-						});
-						return resolve();
-					});
+							_.each(records, (rec) => {
+								if (rec.success == false) {
+									winston.error('Error creating record', rec);
+								}
+							});
+							return resolve();
+						}
+					);
 				})
 				.then(resolve)
 				.catch(reject)
